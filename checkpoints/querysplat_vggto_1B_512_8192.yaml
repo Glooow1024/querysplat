@@ -1,0 +1,30 @@
+img_size: [512, 512]
+patch_size: 8
+dec_depth: 12
+enc_embed_dim: 2048
+enc_num_heads: 16
+mlp_ratio: 4.0
+bg_color: grey
+gaussian_scale_cap: 0.075
+gaussian_z_offset: 1.0
+gaussian_save_opacity_threshold: 0.005
+gaussian_sh_degree: 1
+gaussian_sh_rest_scale: 0.1
+num_gs_tokens: 8192
+num_gaussians_per_token: 64
+token_dim: 2048
+gs_token_std: 0.01
+num_input_views: 4
+vggt_checkpoint: checkpoints/vggt_omega_1b_512.pt
+vggt_input_size: 512
+vggt_intermediate_layers: [4, 11, 17, 23]
+vggt_keep_camera_token: true
+vggt_keep_scene_token: true
+vggt_use_eye_layer_mixer: true
+vggt_original_encoder_patch_size: 16
+vggt_original_encoder_post_decoder_depth: 6
+vggt_original_encoder_post_use_color_tokens: true
+vggt_original_encoder_post_detach_query: false
+vggt_original_encoder_post_output_params: [rgb, alpha]
+znear: 0.025
+zfar: 125.0

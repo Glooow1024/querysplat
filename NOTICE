@@ -1,0 +1,15 @@
+QuerySplat inference release
+
+Copyright (c) 2026 Inspatio.
+
+Except for the third-party components described below, this release is
+provided under Apache-2.0 as stated in LICENSE.
+
+Portions of the QuerySplat code were developed based on NVIDIA TokenGS, which
+is licensed under Apache-2.0.
+
+The `third_party/vggt_omega/` tree is vendored VGGT-Omega/DINOv3 source and
+is provided under the FAIR Noncommercial Research License. A copy of the
+applicable upstream license is included at `third_party/vggt_omega/LICENSE`.
+The vendored source retains its original Meta Platforms copyright and
+upstream-license notices.
