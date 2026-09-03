@@ -2,6 +2,11 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 outputs/
+results/
 checkpoints/*.pt
 checkpoints/*.pth
 checkpoints/*.safetensors
+
+# Local/runtime artifacts from the multi-model comparison tools.
+tools/multiview_compare/*.log
+tools/multiview_compare/*.pid
