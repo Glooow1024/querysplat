@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 
 import numpy as np
@@ -54,6 +55,10 @@ def parse_args():
     )
     parser.add_argument("--input_folder", required=True)
     parser.add_argument("--output_dir", required=True)
+    parser.add_argument(
+        "--camera_priors_json",
+        help="Optional camera JSON whose ordered frames provide c2w and intrinsics/K.",
+    )
     parser.add_argument(
         "--gaussian_save_opacity_threshold",
         nargs="+",
@@ -166,6 +171,28 @@ def predict_cameras_and_depths(model: QuerySplat, model_input: ModelInput):
     }
 
 
+def load_camera_priors(path: str, sources, device: torch.device):
+    payload = json.load(open(path, "r", encoding="utf-8"))
+    frames = payload.get("frames", [])
+    names = [name for name, _ in sources]
+    if [frame.get("name") for frame in frames] != names:
+        raise ValueError("Camera-prior frame order does not match input images")
+    c2w = torch.tensor([frame["c2w"] for frame in frames], dtype=torch.float32, device=device)
+    w2c = torch.linalg.inv(c2w)
+    intrinsics = []
+    for frame in frames:
+        if "intrinsics" in frame:
+            intrinsics.append(frame["intrinsics"])
+        else:
+            K = frame["K"]
+            intrinsics.append([K[0][0], K[1][1], K[0][2], K[1][2]])
+    return {
+        "cam_view": w2c.transpose(-2, -1).unsqueeze(0),
+        "intrinsics": torch.tensor(intrinsics, dtype=torch.float32, device=device).unsqueeze(0),
+        "pose_enc": torch.zeros((1, len(frames), 9), dtype=torch.float32, device=device),
+    }
+
+
 def validate_args(args, tto_steps: list[int], thresholds: list[float]) -> None:
     if not torch.cuda.is_available():
         raise RuntimeError("This release requires a CUDA device")
@@ -216,11 +243,15 @@ def main():
         decoder=model_input.decoder,
     )
 
-    with torch.no_grad():
-        prediction, camera_seconds = timed_inference_call(
-            device,
-            lambda: predict_cameras_and_depths(model, model_input),
-        )
+    if args.camera_priors_json:
+        prediction = load_camera_priors(args.camera_priors_json, sources, device)
+        camera_seconds = 0.0
+    else:
+        with torch.no_grad():
+            prediction, camera_seconds = timed_inference_call(
+                device,
+                lambda: predict_cameras_and_depths(model, model_input),
+            )
     model_input = ModelInput(
         encoder=model_input.encoder,
         decoder=ModelInputDecoder(
