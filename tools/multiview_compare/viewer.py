@@ -477,7 +477,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             config = json.dumps(
                 {"experiments": self.experiments,
                  "dataset_labels": {"random": "随机采样", "short60": "前60帧均匀采样"},
-                 "method_labels": {"querysplat": "QuerySplat", "querysplat-tto20": "QuerySplat · TTO20", "zipsplat": "ZipSplat · 共享Query相机"}}
+                 "method_labels": {"querysplat": "QuerySplat", "querysplat-tto20": "QuerySplat · TTO20", "zipsplat": "ZipSplat · 共享Query相机", "zipsplat-noprior": "ZipSplat · 无位姿先验"}}
             ).encode("utf-8")
             self._bytes(config, "application/json; charset=utf-8")
             return

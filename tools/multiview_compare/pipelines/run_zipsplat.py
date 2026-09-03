@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ZipSplat DL3DV inference with explicitly labelled GT camera priors."""
+"""ZipSplat DL3DV inference with shared, GT, or no camera priors."""
 
 import argparse
 import gc
@@ -87,9 +87,17 @@ def main() -> None:
     parser.add_argument("--input-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--external-priors", action="store_true")
+    parser.add_argument(
+        "--no-priors",
+        action="store_true",
+        help="Reconstruct without camera/intrinsics input, then register the shared trajectory post hoc.",
+    )
     parser.add_argument("--input-method")
     parser.add_argument("--output-method")
+    parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
+    if args.external_priors and args.no_priors:
+        parser.error("--external-priors and --no-priors are mutually exclusive")
 
     import torch
     from PIL import Image
@@ -117,7 +125,7 @@ def main() -> None:
         if args.output_method:
             out_base = out_base / args.output_method
         out = out_base / "output"
-        if (out / "run_stats.json").is_file() and (out / "gaussians.ply").is_file():
+        if not args.overwrite and (out / "run_stats.json").is_file() and (out / "gaussians.ply").is_file():
             print(f"SKIP {scene_name}/{views}views", flush=True)
             continue
         out.mkdir(parents=True, exist_ok=True)
@@ -137,10 +145,18 @@ def main() -> None:
             query_output = experiment / "output"
             camera_payload = json.loads((query_output / "predicted_input_cameras.json").read_text())
             query_frames = camera_payload["frames"]
-            query_inputs = [query_output / f["source"] for f in query_frames]
-            raw = [load_image(str(p)) for p in query_inputs]
-            camera_mode = "shared_querysplat_predicted_cameras_max_pairwise_normalized"
-            camera_warning = "Uses QuerySplat-predicted cameras as shared priors; compares reconstruction/rendering, not independent pose estimation."
+            if args.no_priors:
+                raw = [load_image(str(p)) for p in image_paths]
+                camera_mode = "pose_free_reconstruction_posthoc_input_only_registration"
+                camera_warning = (
+                    "ZipSplat reconstruction receives images only. QuerySplat poses are used after reconstruction "
+                    "and registered using input images only; no DL3DV ground-truth pose is used."
+                )
+            else:
+                query_inputs = [query_output / f["source"] for f in query_frames]
+                raw = [load_image(str(p)) for p in query_inputs]
+                camera_mode = "shared_querysplat_predicted_cameras_max_pairwise_normalized"
+                camera_warning = "Uses QuerySplat-predicted cameras as shared priors; compares reconstruction/rendering, not independent pose estimation."
         if [f["name"] for f in query_frames] != [frame_name(p) for p in image_paths]:
             raise RuntimeError(f"Camera/image ordering mismatch in {experiment}")
         raw_tensor = torch.stack(raw)
@@ -148,23 +164,140 @@ def main() -> None:
 
         c2w = np.stack([np.asarray(f["c2w"], np.float32) for f in query_frames])
         pose_source = camera_payload.get("camera_source", "camera_priors.json")
-        poses = Pose.from_4x4mat(torch.from_numpy(c2w))
-
         Ks = torch.tensor(np.stack([f["K"] for f in query_frames]), dtype=torch.float32)
         cameras = Camera.from_K(Ks, w=w, h=h)
         side = min(h, w)
         render_cameras = cameras.crop((side - w, side - h)).scale(IMAGE_SIZE / side)
         prepared = to_square(raw_tensor)
+        actual_views = len(image_paths)
 
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
         started = time.perf_counter()
         infer_start = time.perf_counter()
-        gaussians = model(raw_tensor, cameras=cameras, poses=poses, use_priors=True)[0]
+        if args.no_priors:
+            gaussians = model(raw_tensor)[0]
+        else:
+            poses = Pose.from_4x4mat(torch.from_numpy(c2w))
+            gaussians = model(raw_tensor, cameras=cameras, poses=poses, use_priors=True)[0]
         torch.cuda.synchronize()
         infer_seconds = time.perf_counter() - infer_start
+
+        registration_seconds = 0.0
+        registration_scale = None
+        registration_loss = None
+        if args.no_priors:
+            registration_start = time.perf_counter()
+            # ZipSplat is trained in a canonical gauge whose first context camera is identity.
+            # Preserve all relative rotations and camera-center directions from the shared
+            # predicted trajectory; search only the unavoidable global translation scale.
+            first_inv = np.linalg.inv(c2w[0])
+            relative_c2w = first_inv[None] @ c2w
+            axis_flip = np.diag([1.0, -1.0, -1.0, 1.0]).astype(np.float32)
+            pose_conventions = {
+                "relative_as_stored": relative_c2w,
+                "opencv_conjugated": axis_flip[None] @ relative_c2w @ axis_flip[None],
+                "camera_axes_flipped": relative_c2w @ axis_flip[None],
+                "world_axes_flipped": axis_flip[None] @ relative_c2w,
+            }
+            target = prepared.to(device="cuda")
+
+            def score(base: np.ndarray, scale: float) -> float:
+                candidate = base.copy()
+                candidate[:, :3, 3] *= scale
+                candidate_poses = Pose.from_4x4mat(torch.from_numpy(candidate.astype(np.float32)))
+                with torch.no_grad():
+                    candidate_render, _ = gaussians.render(
+                        render_cameras,
+                        candidate_poses,
+                        backgrounds=torch.ones(actual_views, 3, device="cuda"),
+                    )
+                    return float(torch.mean((candidate_render - target) ** 2).item())
+
+            coarse = np.geomspace(0.03, 30.0, 17)
+            coarse_scores = [
+                (name, float(scale), score(base, float(scale)))
+                for name, base in pose_conventions.items()
+                for scale in coarse
+            ]
+            best_convention, best_scale, best_loss = min(coarse_scores, key=lambda item: item[2])
+            fine = np.geomspace(best_scale / 1.6, best_scale * 1.6, 11)
+            fine_scores = [
+                (best_convention, float(scale), score(pose_conventions[best_convention], float(scale)))
+                for scale in fine
+            ]
+            registration_convention, registration_scale, registration_loss = min(
+                coarse_scores + fine_scores, key=lambda item: item[2]
+            )
+            base = torch.from_numpy(pose_conventions[registration_convention].astype(np.float32)).to("cuda")
+            base_rotation = base[:, :3, :3]
+            base_translation = base[:, :3, 3]
+            rotation_delta = torch.nn.Parameter(torch.tensor([1e-6, 0.0, 0.0], device="cuda"))
+            translation_delta = torch.nn.Parameter(torch.zeros(3, device="cuda"))
+            log_scale = torch.nn.Parameter(torch.tensor(math.log(registration_scale), device="cuda"))
+            optimizer = torch.optim.Adam(
+                [
+                    {"params": [rotation_delta, translation_delta], "lr": 0.01},
+                    {"params": [log_scale], "lr": 0.02},
+                ]
+            )
+            best = (registration_loss, rotation_delta.detach().clone(), translation_delta.detach().clone(), log_scale.detach().clone())
+
+            def rotation_matrix(vector: torch.Tensor) -> torch.Tensor:
+                x, y, z = vector.unbind()
+                zero = torch.zeros((), device=vector.device, dtype=vector.dtype)
+                skew = torch.stack((zero, -z, y, z, zero, -x, -y, x, zero)).reshape(3, 3)
+                theta = torch.linalg.vector_norm(vector).clamp_min(1e-8)
+                a = torch.sin(theta) / theta
+                b = (1.0 - torch.cos(theta)) / (theta * theta)
+                return torch.eye(3, device=vector.device) + a * skew + b * (skew @ skew)
+
+            for _ in range(120):
+                optimizer.zero_grad()
+                global_rotation = rotation_matrix(rotation_delta)
+                registered_rotation = global_rotation[None] @ base_rotation
+                registered_translation = (
+                    torch.exp(log_scale) * (global_rotation[None] @ base_translation[..., None]).squeeze(-1)
+                    + translation_delta
+                )
+                candidate_poses = Pose.from_Rt(registered_rotation, registered_translation)
+                candidate_render, _ = gaussians.render(
+                    render_cameras,
+                    candidate_poses,
+                    backgrounds=torch.ones(actual_views, 3, device="cuda"),
+                )
+                loss = torch.mean((candidate_render - target) ** 2)
+                loss.backward()
+                optimizer.step()
+                value = float(torch.mean((candidate_render.detach() - target) ** 2).item())
+                if value < best[0]:
+                    best = (
+                        value,
+                        rotation_delta.detach().clone(),
+                        translation_delta.detach().clone(),
+                        log_scale.detach().clone(),
+                    )
+
+            registration_loss, best_rotation, best_translation, best_log_scale = best
+            with torch.no_grad():
+                global_rotation = rotation_matrix(best_rotation)
+                registered_rotation = global_rotation[None] @ base_rotation
+                registered_translation = (
+                    torch.exp(best_log_scale) * (global_rotation[None] @ base_translation[..., None]).squeeze(-1)
+                    + best_translation
+                )
+                c2w = torch.eye(4, device="cuda").repeat(actual_views, 1, 1)
+                c2w[:, :3, :3] = registered_rotation
+                c2w[:, :3, 3] = registered_translation
+                c2w = c2w.cpu().numpy()
+            registration_scale = float(torch.exp(best_log_scale).item())
+            registration_rotation = global_rotation.cpu().numpy().tolist()
+            registration_translation = best_translation.cpu().numpy().tolist()
+            poses = Pose.from_4x4mat(torch.from_numpy(c2w.astype(np.float32)))
+            torch.cuda.synchronize()
+            registration_seconds = time.perf_counter() - registration_start
+
         render_start = time.perf_counter()
-        actual_views = len(image_paths)
         rendered, _ = gaussians.render(render_cameras, poses, backgrounds=torch.ones(actual_views, 3, device="cuda"))
         torch.cuda.synchronize()
         render_seconds = time.perf_counter() - render_start
@@ -211,6 +344,12 @@ def main() -> None:
             "model_load_seconds": model_load_seconds,
             "inference_seconds": infer_seconds,
             "render_seconds": render_seconds,
+            "posthoc_registration_seconds": registration_seconds,
+            "posthoc_registration_scale": registration_scale,
+            "posthoc_registration_convention": registration_convention if args.no_priors else None,
+            "posthoc_registration_rotation": registration_rotation if args.no_priors else None,
+            "posthoc_registration_translation": registration_translation if args.no_priors else None,
+            "posthoc_registration_input_mse": registration_loss,
             "total_seconds": time.perf_counter() - started,
             "peak_cuda_allocated_gib": torch.cuda.max_memory_allocated() / 1024**3,
             "input_view_psnr": psnr,

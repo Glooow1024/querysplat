@@ -20,6 +20,7 @@ def main():
     parser.add_argument("--fps", type=int, default=24)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--full-gaussians", action="store_true")
+    parser.add_argument("--method", action="append", help="Only render selected method directory names.")
     args = parser.parse_args()
 
     import torch
@@ -28,6 +29,8 @@ def main():
     jobs = []
     for root in args.result_root:
         for output_dir in root.glob("[0-9][0-9]_*/[0-9]*views/*/output"):
+            if args.method and output_dir.parent.name not in args.method:
+                continue
             if args.full_gaussians:
                 ply = output_dir / "gaussians_opacity0.ply"
             else:
