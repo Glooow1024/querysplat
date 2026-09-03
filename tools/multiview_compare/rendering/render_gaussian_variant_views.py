@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from render_gt_trajectory_videos import load_gaussians
+from gaussian_io import load_gaussians
 
 
 def main():

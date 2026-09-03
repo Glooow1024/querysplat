@@ -3,11 +3,11 @@
 
 Run without arguments to choose an experiment folder with a native folder dialog:
 
-    python tools/trajectory_viewer.py
+    python tools/multiview_compare/viewer.py
 
 Or pass a folder containing ``input/`` and ``output/`` directly:
 
-    python tools/trajectory_viewer.py D:\results\01_scene\16views
+    python tools/multiview_compare/viewer.py /root/multiview_compare/experiments
 """
 
 from __future__ import annotations

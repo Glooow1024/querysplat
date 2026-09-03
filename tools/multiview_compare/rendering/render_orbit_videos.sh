@@ -2,10 +2,11 @@
 set -euo pipefail
 cd /root/zipsplat/ZipSplat
 export TORCH_EXTENSIONS_DIR=/root/zipsplat/ZipSplat/.torch_extensions
+script=/root/querysplat_ws/querysplat/tools/multiview_compare/rendering/render_orbit_videos.py
 CUDA_VISIBLE_DEVICES=0 .venv/bin/python -c 'from gsplat.cuda._backend import _C; print("gsplat ready")'
 pids=()
 for worker in $(seq 0 7); do
-  CUDA_VISIBLE_DEVICES="$worker" .venv/bin/python /tmp/render_querysplat_videos.py \
+  CUDA_VISIBLE_DEVICES="$worker" .venv/bin/python "$script" \
     --worker "$worker" --num-workers 8 \
     --root /root/multiview_compare/experiments/random \
     --root /root/multiview_compare/experiments/short60 \

@@ -2,8 +2,9 @@
 set -euo pipefail
 cd /root/zipsplat/ZipSplat
 export TORCH_EXTENSIONS_DIR=/root/zipsplat/ZipSplat/.torch_extensions
+script=/root/querysplat_ws/querysplat/tools/multiview_compare/rendering/render_predicted_trajectory_videos.py
 for worker in $(seq 0 7); do
-  CUDA_VISIBLE_DEVICES=$worker .venv/bin/python /tmp/render_predicted_trajectory_videos.py \
+  CUDA_VISIBLE_DEVICES=$worker .venv/bin/python "$script" \
     --worker "$worker" --num-workers 8 --overwrite --num-frames 240 --fps 24 \
     --result-root /root/multiview_compare/experiments/random \
     --result-root /root/multiview_compare/experiments/short60 \

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from render_gt_trajectory_videos import fit_sim3, load_gaussians
+from gaussian_io import fit_sim3, load_gaussians
 
 CV_FLIP = np.diag([1.0, -1.0, -1.0, 1.0])
 

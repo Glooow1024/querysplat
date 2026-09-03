@@ -1,8 +1,24 @@
-# Multi-model comparison viewer
+# Multi-model comparison toolkit
 
-This directory is the version-controlled source for the QuerySplat/ZipSplat
-comparison viewer. Experiment data and runtime logs remain outside Git under
-`/root/multiview_compare` on the server.
+This is the version-controlled home of the QuerySplat/ZipSplat comparison
+workflow. Experiment data, generated media, reports, and runtime logs remain
+outside Git under `/root/multiview_compare` on the server.
+
+## Source layout
+
+```text
+tools/multiview_compare/
+├── evaluation/   # PSNR, SSIM, LPIPS, timing, and GS-count reports
+├── pipelines/    # dataset preparation and QuerySplat/ZipSplat batch runs
+├── rendering/    # predicted/GT trajectory and GS-variant rendering
+├── viewer.py     # browser UI and read-only media server
+├── run_viewer.sh
+└── open_viewer_tunnel.bat
+```
+
+Scripts in `rendering/` share Gaussian loading and Sim(3) utilities from
+`gaussian_io.py`. Server launchers call the checked-in scripts directly; they
+do not depend on temporary copies in `/tmp`.
 
 ## Server layout
 
@@ -14,7 +30,7 @@ comparison viewer. Experiment data and runtime logs remain outside Git under
 The experiment hierarchy and method naming rules are documented in
 `RESULT_LAYOUT.md`.
 
-## Start or restart on the server
+## Start or restart the viewer
 
 ```bash
 cd /root/querysplat_ws/querysplat
