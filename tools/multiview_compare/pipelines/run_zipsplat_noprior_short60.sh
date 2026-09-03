@@ -11,6 +11,7 @@ for worker in $(seq 0 7); do
     --worker "$worker" --num-workers 8 \
     --input-root "$root" --output-root "$root" \
     --input-method querysplat --output-method zipsplat-noprior --no-priors \
+    --pose-refinement-steps 30 --overwrite \
     >/root/multiview_compare/logs/zipsplat_noprior_short60_${worker}.log 2>&1 &
 done
 

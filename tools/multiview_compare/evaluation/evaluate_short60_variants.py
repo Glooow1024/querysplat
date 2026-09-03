@@ -56,7 +56,11 @@ def main():
         scene, views = query_exp.parents[1].name, int(query_exp.parent.name.removesuffix("views"))
         for method, gs_variant, method_dir, render_dir, ply_name in configs:
             exp = query_exp.parent / method_dir; output = exp / "output"
-            cameras = json.loads((output / "predicted_input_cameras.json").read_text())["frames"]
+            camera_path = output / "predicted_input_cameras.json"
+            if not camera_path.is_file():
+                print(f"SKIP {scene[:2]} {views} {method}: missing camera/result files", flush=True)
+                continue
+            cameras = json.loads(camera_path.read_text())["frames"]
             refs, preds, meta = [], [], []
             for frame in cameras:
                 idx, name = int(frame["index"]), frame["name"]
@@ -64,6 +68,9 @@ def main():
                 render = output / render_dir / f"render_view{idx}.png"
                 if source.is_file() and render.is_file():
                     refs.append(image(source, True)); preds.append(image(render)); meta.append((idx, name))
+            if not refs:
+                print(f"SKIP {scene[:2]} {views} {method}: no render/reference pairs", flush=True)
+                continue
             rt = torch.from_numpy(np.stack(refs)).permute(0,3,1,2).to(device)*2-1
             pt = torch.from_numpy(np.stack(preds)).permute(0,3,1,2).to(device)*2-1
             with torch.no_grad(): lp = metric(pt, rt).flatten().cpu().numpy()
@@ -92,11 +99,11 @@ def main():
         overall.append({"method":method,"gs_variant":variant,"experiments":len(exps),"images":len(rows),"psnr":avg(rows,"psnr"),"ssim":avg(rows,"ssim"),"lpips_alex":avg(rows,"lpips_alex"),"gaussians":avg(exps,"gaussians"),"pose_depth_seconds":avg(exps,"pose_depth_seconds"),"posthoc_registration_seconds":avg(exps,"posthoc_registration_seconds"),"reconstruction_seconds":avg(exps,"reconstruction_seconds"),"render_all_input_views_seconds":avg(exps,"render_all_input_views_seconds")})
     write_csv(OUT/"overall.csv",overall); write_csv(OUT/"aggregate_by_views.csv",aggregate); write_csv(OUT/"per_experiment.csv",per_experiment); write_csv(OUT/"per_view.csv",per_view)
     (OUT/"results.json").write_text(json.dumps({"overall":overall,"by_views":aggregate,"per_experiment":per_experiment},indent=2)+"\n")
-    lines=["# 前60帧重建配置对比报告","","## 评测矩阵","","共10个场景、4/8/12/16视角，每种配置40组、400张输入视角图像。QuerySplat两种方法分别比较全量GS与opacity≥0.05筛选GS；ZipSplat的原生PLY是完整模型输出。","","## 总体结果","","| 方法 | GS策略 | PSNR ↑ | SSIM ↑ | LPIPS ↓ | 平均GS数 | 重建s | 后置配准s | 全部输入视角渲染s |","|---|---|---:|---:|---:|---:|---:|---:|---:|"]
+    lines=["# 前60帧重建配置对比报告","","## 评测矩阵","","共10个场景、4/8/12/16视角；完整配置为40组、400张输入视角图像。ZipSplat-NoPrior因场景06缺少位姿初值为36组、360张。QuerySplat两种方法分别比较全量GS与opacity≥0.05筛选GS；ZipSplat的原生PLY是完整模型输出。","","## 总体结果","","| 方法 | GS策略 | PSNR ↑ | SSIM ↑ | LPIPS ↓ | 平均GS数 | 重建s | 后置配准s | 全部输入视角渲染s |","|---|---|---:|---:|---:|---:|---:|---:|---:|"]
     for r in overall: lines.append(f"| {r['method']} | {r['gs_variant']} | {r['psnr']:.3f} | {r['ssim']:.4f} | {r['lpips_alex']:.4f} | {r['gaussians']:.0f} | {r['reconstruction_seconds']:.3f} | {r['posthoc_registration_seconds']:.3f} | {r['render_all_input_views_seconds']:.4f} |")
     lines += ["","## 分视角结果","","| 视角 | 方法 | GS策略 | PSNR ↑ | SSIM ↑ | LPIPS ↓ | GS数 | 重建s | 后置配准s | 渲染s |","|---:|---|---|---:|---:|---:|---:|---:|---:|---:|"]
     for r in aggregate: lines.append(f"| {r['views']} | {r['method']} | {r['gs_variant']} | {r['psnr']:.3f} | {r['ssim']:.4f} | {r['lpips_alex']:.4f} | {r['gaussians']:.0f} | {r['reconstruction_seconds']:.3f} | {r['posthoc_registration_seconds']:.3f} | {r['render_all_input_views_seconds']:.4f} |")
-    lines += ["","## 口径说明","","- 图片指标是输入视角重建指标；真实图和预测图统一中心裁剪/缩放至256×256。","- QuerySplat全量与筛选结果均从对应PLY通过同一渲染器重新渲染，以避免把内存渲染和PLY重载混为一谈。","- QuerySplat同一方法的全量/筛选配置共享同一次重建，因此重建时间相同；差异在GS数、渲染耗时与图像结果。","- ZipSplat共享相机组在重建阶段使用QuerySplat预测相机先验。","- ZipSplat-NoPrior重建阶段只输入图像；完成重建后，仅用输入帧拟合一个共享Sim(3)，再转换同一套QuerySplat预测轨迹。它不使用DL3DV真实位姿，也不对每个评测视角单独优化。","- 后置配准时间独立于模型重建时间报告。","- LPIPS使用AlexNet v0.1；PSNR/SSIM越高越好，LPIPS越低越好。",""]
+    lines += ["","## 口径说明","","- 图片指标是输入视角重建指标；真实图和预测图统一中心裁剪/缩放至256×256。","- QuerySplat全量与筛选结果均从对应PLY通过同一渲染器重新渲染，以避免把内存渲染和PLY重载混为一谈。","- QuerySplat同一方法的全量/筛选配置共享同一次重建，因此重建时间相同；差异在GS数、渲染耗时与图像结果。","- ZipSplat共享相机组在重建阶段使用QuerySplat预测相机先验。","- ZipSplat-NoPrior重建阶段只输入图像，不输入相机。后置渲染采用官方pose-free评测的同类流程：使用DL3DV真值内参、OpenGL→OpenCV且相对第一context归一化的真值位姿作为初值，再对每个视角执行30步photometric+VGG-LPIPS pose refinement。","- 这里评估的是所选输入视角，而论文benchmark优化的是目标视角，因此不是对官方benchmark数值的复现；该组指标也不能解释为模型直接输出相机后的指标。","- 场景06的前60帧既不在transforms.json中，COLMAP也未注册，无法取得官方流程需要的GT位姿初值，故ZipSplat-NoPrior跳过该场景。","- 后置配准和位姿优化时间独立于模型重建时间报告。","- LPIPS使用AlexNet v0.1；PSNR/SSIM越高越好，LPIPS越低越好。",""]
     (OUT/"REPORT_ZH.md").write_text("\n".join(lines),encoding="utf-8")
 
 
